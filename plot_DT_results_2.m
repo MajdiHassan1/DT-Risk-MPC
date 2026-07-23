@@ -1,9 +1,8 @@
 clear; clc; close all;
 
-%% =========================================================================
+
 % DT-Risk MPC Post-Processing & Figure Generation Script
 % Synchronized with Manuscript: Paper 2_Majdi Hassan_V2.pdf
-% =========================================================================
 
 % Manuscript Parameters
 d_safe = 0.250;        % Predefined Safety Distance Threshold (m)
@@ -17,9 +16,7 @@ set(0, 'DefaultAxesFontSize', 12);
 set(0, 'DefaultTextFontName', 'Arial');
 set(0, 'DefaultTextFontSize', 12);
 
-%% =========================================================================
 % Scenario 1: Obstacle-Free Environment (Fig. 5)
-% =========================================================================
 if exist('scenario1_results.mat', 'file')
     data1 = load('scenario1_results.mat');
     sim_obj1 = find_sim_data(data1, 'out1');
@@ -48,9 +45,8 @@ if exist('scenario1_results.mat', 'file')
     saveas(gcf, 'Fig_5.png');
 end
 
-%% =========================================================================
+
 % Scenario 2: Static Obstacles Environment (Fig. 6)
-% =========================================================================
 if exist('scenario2_results.mat', 'file')
     data2 = load('scenario2_results.mat');
     sim_obj2 = find_sim_data(data2, 'out2');
@@ -91,9 +87,7 @@ if exist('scenario2_results.mat', 'file')
     saveas(gcf, 'Fig_6.png');
 end
 
-%% =========================================================================
 % Scenario 3: Dynamic Obstacles Environment (Fig. 7 & Fig. 8)
-% =========================================================================
 if exist('scenario3_results.mat', 'file')
     data3 = load('scenario3_results.mat');
     sim_obj3 = find_sim_data(data3, 'out3');
@@ -112,9 +106,8 @@ if exist('scenario3_results.mat', 'file')
 
     obs3_list = extract_obstacles(obs3_raw);
 
-   %% ---------------------------------------------------------------------
+ --
     % Figure 7: Navigation Trajectories in Dynamic-Obstacle Environment
-    % ---------------------------------------------------------------------
     figure('Name', 'Fig 7: Dynamic-Obstacle Environment', 'Color', 'w', 'Position', [100, 100, 720, 330]);
     plot(ref3(:,1), ref3(:,2), 'k--', 'LineWidth', 2); hold on;
     plot(conv3(:,1), conv3(:,2), 'r:', 'LineWidth', 2.5);
@@ -147,9 +140,8 @@ if exist('scenario3_results.mat', 'file')
     
     saveas(gcf, 'Fig_7.png');
 
-    %% ---------------------------------------------------------------------
+   
     % Figure 8: Future Obstacle Trajectory Prediction over Horizon
-    % ---------------------------------------------------------------------
     k_show = round(length(t3) / 2);
     Ts = 0.1;
     Np = 20;
@@ -203,9 +195,8 @@ if exist('scenario3_results.mat', 'file')
     saveas(gcf, 'Fig_8.png');
 end
 
-%% =========================================================================
+
 % Helper Functions
-% =========================================================================
 function obs_list = extract_obstacles(obs_raw)
     obs_list = {};
     sz = size(obs_raw);
