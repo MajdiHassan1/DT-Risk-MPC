@@ -1,0 +1,6 @@
+Metric,Conventional_MPC,Proposed_Method
+RMSE (m),0.269874503577224,0.327628980129151
+Path Length (m),12.3742494397571,12.1426186136821
+Minimum Obstacle Distance (m),0.152222203577931,0.255239427682214
+Collision Rate (%),7.82029950083195,7.48752079866888
+Computation Time (ms),1.5,2.3

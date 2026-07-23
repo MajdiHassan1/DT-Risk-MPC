@@ -1,0 +1,6 @@
+Safety_Metric,Conventional_MPC,Proposed_DT_Risk_MPC
+"Mean Clearance Distance d_min (m)",1.98279578080511,1.99967959184966
+"Mean Safety Margin SM (m)",1.73279578080511,1.74967959184966
+"Absolute Worst-Case Distance d_{min,abs} (m)",-0.00150710192151843,0.504533782158504
+"Safety Violation Rate SVR (%)",2.82861896838602,0
+"Safety Violations N_{viol}",17,0
