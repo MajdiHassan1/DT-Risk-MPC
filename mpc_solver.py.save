@@ -1,0 +1,503 @@
+#!/usr/bin/env python3
+
+"""
+mpc_solver.py
+
+Risk-Aware Nonlinear Model Predictive Controller (NMPC)
+
+Author : Majdi Hassan
+
+Framework
+---------
+ROS2 Humble
+
+Robot
+-----
+TurtleBot3 Mobile Robot
+
+State
+-----
+x = [x, y, theta]
+
+Control
+-------
+u = [v, omega]
+"""
+
+import casadi as ca
+import numpy as np
+
+try:
+    from .robot_model import DifferentialDriveModel
+except ImportError:
+    from robot_model import DifferentialDriveModel
+
+
+class MPCSolver:
+    """
+    Risk-Aware Nonlinear MPC Solver
+    """
+
+    # Constructor
+
+    def __init__(self, horizon=20, dt=0.10):
+
+        # Prediction Parameters (Table I: Np = 20, Ts = 0.10 s)
+        self.N = horizon
+        self.dt = dt
+
+        # Robot Kinematic Model
+        self.model = DifferentialDriveModel(dt)
+        self.nx = self.model.nx
+        self.nu = self.model.nu
+
+        # Cost Weighting Matrices (Table I Alignment)
+        # State tracking Q = diag([10, 10, 1])
+        self.Q = ca.diagcat(10.0, 10.0, 1.0)
+
+        # Control effort R = diag([0.1, 0.05])
+        self.R = ca.diagcat(0.10, 0.05)
+
+        # Terminal cost matrix
+        self.Qf = ca.diagcat(20.0, 20.0, 2.0)
+
+        # Risk & Soft Constraint Parameters (Table I Alignment)
+        self.lambda_risk = 15.5   # Collision-Risk Scaling Factor (\lambda)
+        self.rho_slack = 500.0     # Slack Variable Quadratic Penalty Weight (\rho)
+        self.sigma = 0.35          # Risk-Sensitivity Parameter (\sigma)
+        self.safe_distance = 0.250 # Predefined Safety Distance (d_safe = 0.250 m)
+
+        # Robot Velocity Bounds (Table I Limits)
+        self.v_min = 0.0
+        self.v_max = 1.0   # Maximum Linear Velocity (1.0 m/s)
+
+        self.w_min = -1.5  # Minimum Angular Velocity (-1.5 rad/s)
+        self.w_max = 1.5   # Maximum Angular Velocity (1.5 rad/s)
+
+        # Obstacles
+        self.max_obstacles = 10
+
+        # Optimization Variables
+        # State Matrix X = [x0 x1 ... xN]
+        self.X = ca.SX.sym("X", self.nx, self.N + 1)
+
+        # Control Matrix U = [u0 u1 ... uN-1]
+        self.U = ca.SX.sym("U", self.nu, self.N)
+
+        # Slack Variables Eps = [eps0 eps1 ... epsN-1] (Eq. 21)
+        self.Eps = ca.SX.sym("Eps", self.N)
+
+        # Parameters
+        self.X0 = ca.SX.sym("X0", self.nx)
+        self.Xref = ca.SX.sym("Xref", self.nx)
+        self.risk = ca.SX.sym("risk")
+        self.obstacles = ca.SX.sym("obstacles", 2, self.max_obstacles)
+
+        # Containers
+        self.cost = 0.0
+        self.constraints = []
+
+        self.lbg = []
+        self.ubg = []
+
+        self.lbx = []
+        self.ubx = []
+
+        # Decision Variables Vector
+        self.variables = ca.vertcat(
+            ca.reshape(self.X, -1, 1),
+            ca.reshape(self.U, -1, 1),
+            ca.reshape(self.Eps, -1, 1)
+        )
+
+        # Parameter Vector
+        self.parameters = ca.vertcat(
+            self.X0,
+            self.Xref,
+            self.risk,
+            ca.reshape(self.obstacles, -1, 1)
+        )
+
+        # Warm Start & Memory Buffers
+        self.initial_guess = np.zeros(self.variables.numel())
+        self.solver = None
+
+        # Build Optimizer
+        self.build_optimizer()
+
+    # Build Optimizer (Manuscript Equations 20-26)
+
+    def build_optimizer(self):
+
+        self.cost = 0.0
+        self.constraints = []
+
+        self.lbg = []
+        self.ubg = []
+
+        self.lbx = []
+        self.ubx = []
+
+        # Initial State Equality Constraint: X(:, 0) == X0
+        self.constraints.append(self.X[:, 0] - self.X0)
+        self.lbg.extend([0.0] * self.nx)
+        self.ubg.extend([0.0] * self.nx)
+
+        # Prediction Horizon Loop
+        for k in range(self.N):
+
+            xk = self.X[:, k]
+            uk = self.U[:, k]
+            eps_k = self.Eps[k]
+            x_next = self.X[:, k + 1]
+
+            # Dynamic Kinematic Model Propagation
+            x_predict = self.model.discrete_model(xk, uk)
+
+            # Continuity Constraint
+            self.constraints.append(x_next - x_predict)
+            self.lbg.extend([0.0] * self.nx)
+            self.ubg.extend([0.0] * self.nx)
+
+            # Desired Heading to Reference Goal
+            theta_ref = ca.atan2(
+                self.Xref[1] - xk[1],
+                self.Xref[0] - xk[0]
+            )
+
+            # Tracking Error Vector e(k+i|k) (Eq. 20)
+            error = ca.vertcat(
+                xk[0] - self.Xref[0],
+                xk[1] - self.Xref[1],
+                xk[2] - theta_ref
+            )
+
+            # 1. State Tracking Cost: e' * Q * e
+            self.cost += ca.mtimes([error.T, self.Q, error])
+
+            # 2. Control Effort Cost: u' * R * u
+            self.cost += ca.mtimes([uk.T, self.R, uk])
+
+            # 3. Collision Risk Cost & Soft-Constraint Quadratic Penalty (Eq. 21)
+            self.cost += self.lambda_risk * self.risk * (uk[0] ** 2 + 0.5 * uk[1] ** 2)
+            self.cost += self.rho_slack * (eps_k ** 2)
+
+            # 4. Obstacle Avoidance Constraints with Relaxation (Eq. 24)
+            for i in range(self.max_obstacles):
+                ox = self.obstacles[0, i]
+                oy = self.obstacles[1, i]
+
+                distance = ca.sqrt((xk[0] - ox) ** 2 + (xk[1] - oy) ** 2 + 1e-6)
+
+                # Relaxed Safety Constraint: d_i >= d_safe - eps_i
+                self.constraints.append(distance + eps_k)
+                self.lbg.append(self.safe_distance)
+                self.ubg.append(1.0e6)
+
+        # Terminal Error and Cost
+        terminal_error = self.X[:, self.N] - self.Xref
+        self.cost += ca.mtimes([terminal_error.T, self.Qf, terminal_error])
+
+        # State Variable Bounds
+        INF = 1.0e6
+        for _ in range(self.N + 1):
+            self.lbx.extend([-INF, -INF, -INF])
+            self.ubx.extend([INF, INF, INF])
+
+        # Control Input Bounds (v, w Limits from Table I)
+        for _ in range(self.N):
+            self.lbx.extend([self.v_min, self.w_min])
+            self.ubx.extend([self.v_max, self.w_max])
+
+        # Non-negative Slack Variable Bounds (eps_i >= 0, Eq. 25)
+        for _ in range(self.N):
+            self.lbx.append(0.0)
+            self.ubx.append(INF)
+
+        # NLP Problem Structure
+        nlp = {
+            "x": self.variables,
+            "f": self.cost,
+            "g": ca.vertcat(*self.constraints),
+            "p": self.parameters
+        }
+
+        # IPOPT Solver Configuration
+        options = {
+            "ipopt.print_level": 0,
+            "ipopt.max_iter": 100,
+            "ipopt.tol": 1e-5,
+            "ipopt.acceptable_tol": 1e-4,
+            "ipopt.linear_solver": "mumps",
+            "print_time": False,
+            "ipopt.sb": "yes",
+            "expand": True
+        }
+
+        self.solver = ca.nlpsol("solver", "ipopt", nlp, options)
+
+    # Solve MPC Step
+
+    def solve(
+        self,
+        current_state,
+        goal_state,
+        collision_risk=0.0,
+        predicted_obstacles=None
+    ):
+        if predicted_obstacles is None:
+            predicted_obstacles = []
+
+        obstacle_matrix = np.ones((2, self.max_obstacles)) * 1000.0
+
+        for i, obstacle in enumerate(predicted_obstacles):
+            if i >= self.max_obstacles:
+                break
+            obstacle_matrix[0, i] = obstacle[0]
+            obstacle_matrix[1, i] = obstacle[1]
+
+        parameters = np.concatenate([
+            np.asarray(current_state, dtype=float),
+            np.asarray(goal_state, dtype=float),
+            np.array([collision_risk], dtype=float),
+            obstacle_matrix.flatten(order="F")
+        ])
+
+        try:
+            solution = self.solver(
+                x0=self.initial_guess,
+                lbx=self.lbx,
+                ubx=self.ubx,
+                lbg=self.lbg,
+                ubg=self.ubg,
+                p=parameters
+            )
+        except RuntimeError as error:
+            print("\n=====================================")
+            print("NMPC SOLVER ERROR")
+            print("=====================================")
+            print(error)
+            print("=====================================\n")
+            return 0.0, 0.0
+
+        stats = self.solver.stats()
+        if not stats.get("success", False):
+            print("\n=====================================")
+            print("IPOPT FAILED")
+            print("=====================================")
+            print(stats.get("return_status", "Unknown"))
+            print("=====================================\n")
+            return 0.0, 0.0
+
+        self.initial_guess = np.array(solution["x"]).flatten()
+
+        nx_total = self.nx * (self.N + 1)
+        state_vector = self.initial_guess[:nx_total]
+        self.predicted_states = state_vector.reshape(self.nx, self.N + 1, order="F")
+
+        nu_total = self.nu * self.N
+        control_vector = self.initial_guess[nx_total : nx_total + nu_total]
+        self.predicted_controls = control_vector.reshape(self.nu, self.N, order="F")
+
+        # Receding Horizon Action Selection
+        v = float(self.predicted_controls[0, 0])
+        w = float(self.predicted_controls[1, 0])
+
+        v = np.clip(v, self.v_min, self.v_max)
+        w = np.clip(w, self.w_min, self.w_max)
+
+        # Shift Warm Start Buffer
+        shifted_states = np.copy(self.predicted_states)
+        shifted_controls = np.copy(self.predicted_controls)
+
+        shifted_states[:, :-1] = shifted_states[:, 1:]
+        shifted_states[:, -1] = shifted_states[:, -2]
+
+        shifted_controls[:, :-1] = shifted_controls[:, 1:]
+        shifted_controls[:, -1] = shifted_controls[:, -2]
+
+        # Preserve Slack Variable Guess Length
+        slack_guess = np.zeros(self.N)
+
+        self.initial_guess = np.concatenate([
+            shifted_states.reshape(-1, order="F"),
+            shifted_controls.reshape(-1, order="F"),
+            slack_guess
+        ])
+
+        return v, w
+
+    # Helper & Getter Methods
+
+    def reset(self):
+        self.initial_guess = np.zeros(self.variables.numel())
+
+    def set_tracking_weights(self, qx, qy, qtheta):
+        self.Q = ca.diagcat(qx, qy, qtheta)
+        self.build_optimizer()
+
+    def set_control_weights(self, rv, rw):
+        self.R = ca.diagcat(rv, rw)
+        self.build_optimizer()
+
+    def set_terminal_weights(self, qx, qy, qtheta):
+        self.Qf = ca.diagcat(qx, qy, qtheta)
+        self.build_optimizer()
+
+    def set_risk_weight(self, weight):
+        self.lambda_risk = weight
+        self.build_optimizer()
+
+    def set_safe_distance(self, distance):
+        self.safe_distance = distance
+        self.build_optimizer()
+
+    def set_velocity_limits(self, vmax, wmax):
+        self.v_max = vmax
+        self.v_min = 0.0
+        self.w_max = wmax
+        self.w_min = -wmax
+        self.build_optimizer()
+
+    def get_horizon(self):
+        return self.N
+
+    def get_dt(self):
+        return self.dt
+
+    def get_state_dimension(self):
+        return self.nx
+
+    def get_input_dimension(self):
+        return self.nu
+
+    def get_safe_distance(self):
+        return self.safe_distance
+
+    def get_predicted_states(self):
+        if hasattr(self, "predicted_states"):
+            return self.predicted_states
+        return None
+
+    def get_predicted_controls(self):
+        if hasattr(self, "predicted_controls"):
+            return self.predicted_controls
+        return None
+
+    def get_predicted_path(self):
+        if not hasattr(self, "predicted_states"):
+            return []
+        path = []
+        for k in range(self.N + 1):
+            path.append((
+                float(self.predicted_states[0, k]),
+                float(self.predicted_states[1, k]),
+                float(self.predicted_states[2, k])
+            ))
+        return path
+
+    def goal_reached(self, current_state, goal_state, tolerance=0.20):
+        dx = goal_state[0] - current_state[0]
+        dy = goal_state[1] - current_state[1]
+        distance = np.sqrt(dx * dx + dy * dy)
+        return distance <= tolerance
+
+    def tracking_error(self, current_state, goal_state):
+        dx = goal_state[0] - current_state[0]
+        dy = goal_state[1] - current_state[1]
+        distance = np.sqrt(dx ** 2 + dy ** 2)
+        heading = np.arctan2(dy, dx)
+        heading_error = heading - current_state[2]
+
+        while heading_error > np.pi:
+            heading_error -= 2.0 * np.pi
+        while heading_error < -np.pi:
+            heading_error += 2.0 * np.pi
+
+        return distance, heading_error
+
+    def print_information(self):
+        print("\n==========================================")
+        print(" Risk-Aware Nonlinear MPC ")
+        print("==========================================")
+        print(f"Horizon (Np)       : {self.N}")
+        print(f"Sampling Time (Ts) : {self.dt:.3f} s")
+        print(f"State Dimension    : {self.nx}")
+        print(f"Input Dimension    : {self.nu}")
+        print(f"Safe Distance      : {self.safe_distance:.3f} m")
+        print(f"Maximum Obstacles  : {self.max_obstacles}")
+        print(f"Maximum Velocity   : {self.v_max:.2f} m/s")
+        print(f"Maximum Angular    : {self.w_max:.2f} rad/s")
+        print(f"Risk Weight        : {self.lambda_risk:.2f}")
+        print(f"Slack Penalty      : {self.rho_slack:.1f}")
+        print("==========================================\n")
+
+    def __str__(self):
+        return (
+            f"MPCSolver(N={self.N}, dt={self.dt}, "
+            f"safe_distance={self.safe_distance}, "
+            f"vmax={self.v_max}, wmax={self.w_max})"
+        )
+
+# Standalone Test Entry Point
+
+if __name__ == "__main__":
+
+    print("\n==============================================")
+    print("     Risk-Aware Nonlinear MPC Test")
+    print("==============================================\n")
+
+    solver = MPCSolver(horizon=20, dt=0.10)
+    solver.print_information()
+
+    current_state = np.array([0.0, 0.0, 0.0])
+    goal_state = np.array([2.0, 2.0, 0.0])
+    collision_risk = 0.20
+    predicted_obstacles = [(0.8, 0.6), (1.3, 1.2), (1.6, 1.8)]
+
+    v, w = solver.solve(
+        current_state=current_state,
+        goal_state=goal_state,
+        collision_risk=collision_risk,
+        predicted_obstacles=predicted_obstacles
+    )
+
+    print("\n==============================================")
+    print("Optimal Control")
+    print("==============================================")
+    print(f"Linear Velocity  : {v:.4f} m/s")
+    print(f"Angular Velocity : {w:.4f} rad/s")
+
+    prediction = solver.get_predicted_path()
+
+    print("\n==============================================")
+    print("Predicted States")
+    print("==============================================")
+
+    if len(prediction) == 0:
+        print("No prediction available.")
+    else:
+        for k, state in enumerate(prediction):
+            print(
+                f"{k:02d} : "
+                f"x={state[0]:.3f}  "
+                f"y={state[1]:.3f}  "
+                f"theta={state[2]:.3f}"
+            )
+
+    reached = solver.goal_reached(current_state, goal_state)
+    print("\n==============================================")
+    print("Goal Status")
+    print("==============================================")
+    print("Reached :", reached)
+
+    distance, heading = solver.tracking_error(current_state, goal_state)
+    print("\n==============================================")
+    print("Tracking Error")
+    print("==============================================")
+    print(f"Distance Error : {distance:.3f} m")
+    print(f"Heading Error  : {heading:.3f} rad")
+
+    print("\n==============================================")
+    print("NMPC Test Completed Successfully")
+    print("==============================================\n")
