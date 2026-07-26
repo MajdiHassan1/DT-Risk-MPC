@@ -35,11 +35,12 @@ class RiskEvaluationNode(Node):
     def __init__(self):
         super().__init__("risk_evaluation_node")
 
-
         # Risk Parameters (Table I Alignment)
         self.Ts = 0.10             # Sampling Period (Ts = 0.10 s)
         self.sigma = 0.35          # Risk Sensitivity Parameter (\sigma = 0.35)
         self.risk_threshold = 1.0  # Risk Threshold Boundary
+        self.r_robot = 0.105       # TurtleBot3 Physical Chassis Radius (m)
+        self.r_obs = 0.050         # Obstacle Physical Radius (m)
 
         # Topics
         self.state_topic = "/digital_twin/state"
@@ -57,6 +58,7 @@ class RiskEvaluationNode(Node):
         self.total_risk = 0.0
         self.maximum_risk = 0.0
         self.minimum_distance = float("inf")
+        self.minimum_clearance = float("inf")
 
         # Subscribers
         self.create_subscription(
@@ -109,6 +111,7 @@ class RiskEvaluationNode(Node):
             self.total_risk = 0.0
             self.maximum_risk = 0.0
             self.minimum_distance = float("inf")
+            self.minimum_clearance = float("inf")
 
             msg = Float32()
             msg.data = 0.0
@@ -118,20 +121,27 @@ class RiskEvaluationNode(Node):
         self.total_risk = 0.0
         self.maximum_risk = 0.0
         self.minimum_distance = float("inf")
+        self.minimum_clearance = float("inf")
 
         # Sum Gaussian risk across predicted obstacle horizon (Eq. 18-19)
         for obstacle in self.predicted_obstacles:
             dx = self.robot_x - obstacle.position.x
             dy = self.robot_y - obstacle.position.y
-            distance = math.sqrt(dx * dx + dy * dy)
+            
+            # Center-to-center Euclidean separation distance (strictly positive)
+            center_distance = math.sqrt(dx * dx + dy * dy)
+            
+            # Surface-to-surface clearance distance
+            surface_clearance = center_distance - self.r_robot - self.r_obs
 
-            if distance < self.minimum_distance:
-                self.minimum_distance = distance
+            if center_distance < self.minimum_distance:
+                self.minimum_distance = center_distance
+                self.minimum_clearance = surface_clearance
 
-            # Gaussian Collision Risk Potential (Eq. 18)
-            risk = math.exp(-(distance ** 2) / (self.sigma ** 2))
+            # Center-to-Center Gaussian Collision Risk Potential (Eq. 18)
+            risk = math.exp(-(center_distance ** 2) / (self.sigma ** 2))
 
-            # Cumulative Risk Summation (Eq. 19)
+            # Cumulative Horizon Risk Summation (Eq. 19)
             self.total_risk += risk
 
             if risk > self.maximum_risk:
@@ -149,7 +159,8 @@ class RiskEvaluationNode(Node):
     def print_diagnostics(self):
         self.get_logger().debug(f"Cumulative Horizon Risk : {self.total_risk:.4f}")
         self.get_logger().debug(f"Maximum Point Risk      : {self.maximum_risk:.4f}")
-        self.get_logger().debug(f"Minimum Distance        : {self.minimum_distance:.3f} m")
+        self.get_logger().debug(f"Minimum Distance (c-c)  : {self.minimum_distance:.3f} m")
+        self.get_logger().debug(f"Minimum Clearance (s-s) : {self.minimum_clearance:.3f} m")
 
         if self.total_risk >= self.risk_threshold:
             self.get_logger().warn("High cumulative collision risk detected.")
