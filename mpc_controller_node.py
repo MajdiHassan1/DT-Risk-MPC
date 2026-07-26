@@ -4,10 +4,8 @@
 mpc_controller_node.py
 
 Risk-Aware Nonlinear MPC Controller
-Trajectory Tracking Version
 
-Author : Majdi Hassan
-
+Author : Majdi Hassan et al.
 """
 
 import math
@@ -27,16 +25,13 @@ from .mpc_solver import MPCSolver
 
 class MPCController(Node):
 
-
     # Constructor
 
     def __init__(self):
 
         super().__init__("mpc_controller_node")
 
-
         # Robot State
-
         self.x = 0.0
         self.y = 0.0
         self.yaw = 0.0
@@ -44,9 +39,10 @@ class MPCController(Node):
         self.v = 0.0
         self.w = 0.0
 
+        # Time-Slip State Compensation Parameters (Section IV.F)
+        self.tau_loop = 0.0035  # Computational & DDS Latency (~3.5 ms)
+
         # Goal Status
-
-
         self.goal_reached = False
 
         # Distance required before switching to next waypoint
@@ -54,7 +50,6 @@ class MPCController(Node):
 
         # Reference Trajectory Generation
         # Synchronized with Manuscript Figures (Sine Wave)
-
         self.reference_path = [
             (
                 float(x_val),
@@ -63,33 +58,25 @@ class MPCController(Node):
             for x_val in np.arange(0.0, 7.2, 0.2)
         ]
 
-
         # Current Waypoint
-
         self.reference_index = 0
 
         self.goal_x = self.reference_path[0][0]
         self.goal_y = self.reference_path[0][1]
 
         # Collision Risk
-
-
         self.collision_risk = 0.0
 
         # Predicted Obstacles
-
         self.predicted_obstacles = []
 
-
         # MPC Solver Initialization (Table I: Np = 20, Ts = 0.10s)
-
         self.solver = MPCSolver(
             horizon=20,
             dt=0.10
         )
 
         # Publishers
-
         self.cmd_pub = self.create_publisher(
             Twist,
             "/robot1/cmd_vel",
@@ -105,9 +92,7 @@ class MPCController(Node):
         self.path_msg = Path()
         self.path_msg.header.frame_id = "odom"
 
-
         # Subscribers
-
         self.create_subscription(
             Odometry,
             "/robot1/odom",
@@ -130,29 +115,17 @@ class MPCController(Node):
         )
 
         # Controller Timer Loop (Ts = 0.10 s -> 10 Hz)
-
         self.timer = self.create_timer(
             0.10,
             self.control_loop
         )
 
         # Startup Information
-
-        self.get_logger().info("")
-        self.get_logger().info(" Risk-Aware Nonlinear MPC Controller")
-        self.get_logger().info(
-            f"Reference Waypoints : {len(self.reference_path)}"
-        )
-        self.get_logger().info(
-            f"Current Goal : ({self.goal_x:.2f}, {self.goal_y:.2f})"
-        )
-        self.get_logger().info(
-            f"Horizon (Np) : {self.solver.N}"
-        )
-        self.get_logger().info(
-            f"Sampling Time (Ts) : {self.solver.dt:.2f} s"
-        )
-        self.get_logger().info("Controller Ready.")
+        self.get_logger().info("Risk-Aware Nonlinear MPC Controller Node Started.")
+        self.get_logger().info(f"Reference Waypoints : {len(self.reference_path)}")
+        self.get_logger().info(f"Current Goal : ({self.goal_x:.2f}, {self.goal_y:.2f})")
+        self.get_logger().info(f"Horizon (Np) : {self.solver.N}")
+        self.get_logger().info(f"Sampling Time (Ts) : {self.solver.dt:.2f} s")
 
     # Odometry Callback
 
@@ -189,13 +162,11 @@ class MPCController(Node):
     # Collision Risk Callback
 
     def risk_callback(self, msg: Float32):
-
         self.collision_risk = float(msg.data)
 
     # Predicted Obstacles Callback
 
     def prediction_callback(self, msg: PoseArray):
-
         self.predicted_obstacles.clear()
 
         for pose in msg.poses:
@@ -206,8 +177,15 @@ class MPCController(Node):
                 )
             )
 
+    # Time-Slip State Compensation (Equation 28)
 
-    # State Helpers
+    def current_state_compensated(self):
+        # Forward propagation over delay tau_loop (~3.5 ms)
+        x_comp = self.x + self.v * math.cos(self.yaw) * self.tau_loop
+        y_comp = self.y + self.v * math.sin(self.yaw) * self.tau_loop
+        yaw_comp = self.yaw + self.w * self.tau_loop
+
+        return np.array([x_comp, y_comp, yaw_comp], dtype=float)
 
     def current_state(self):
         return np.array([self.x, self.y, self.yaw], dtype=float)
@@ -230,11 +208,9 @@ class MPCController(Node):
             error += 2.0 * math.pi
         return error
 
-
     # Waypoint Management
 
     def next_waypoint(self):
-
         if self.reference_index >= len(self.reference_path) - 1:
             self.goal_reached = True
             self.get_logger().info("Final waypoint reached.")
@@ -267,7 +243,6 @@ class MPCController(Node):
         cmd.angular.z = 0.0
         self.cmd_pub.publish(cmd)
 
-
     # Control Loop
 
     def control_loop(self):
@@ -286,7 +261,8 @@ class MPCController(Node):
                 return
             distance = self.distance_to_goal()
 
-        current_state = self.current_state()
+        # Apply Time-Slip State Compensation before solver execution (Eq. 28)
+        current_state = self.current_state_compensated()
         goal_state = self.goal_state()
 
         try:
@@ -306,7 +282,7 @@ class MPCController(Node):
         if np.isnan(angular_velocity):
             angular_velocity = 0.0
 
-        # Actuator Saturations (Table I Limits: vmax = 1.0 m/s, wmax = 1.5 rad/s)
+        # Actuator Saturations (Table I Limits: vmax = 0.26 m/s, wmax = 1.5 rad/s)
         linear_velocity = np.clip(
             linear_velocity,
             self.solver.v_min,
@@ -332,9 +308,7 @@ class MPCController(Node):
             f"v: {linear_velocity:.3f} | w: {angular_velocity:.3f}"
         )
 
-    ############################################################
     # Utility Methods
-    ############################################################
 
     def set_goal(self, x, y):
         self.reference_path = [(float(x), float(y))]
