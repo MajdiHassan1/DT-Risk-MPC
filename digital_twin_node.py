@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 
 """
+digital_twin_node.py
+
 Digital Twin Node
 Digital Twin-Assisted Risk-Aware MPC
 Majdi Hassan et al.
-
 
 Description
 -----------
@@ -19,7 +20,8 @@ Functions
 4. Simulate dynamic obstacles
 5. Publish robot state
 6. Publish obstacle states
-7. Publish RViz markers
+7. Publish synchronization error (e_DT)
+8. Publish RViz markers
 
 Topics
 ------
@@ -62,7 +64,6 @@ from tf_transformations import euler_from_quaternion
 
 class DigitalTwinNode(Node):
 
-
     # Constructor
 
     def __init__(self):
@@ -70,20 +71,16 @@ class DigitalTwinNode(Node):
 
         # Sampling Time (Table I: Ts = 0.10 s)
         self.Ts = 0.10
-        # LiDAR Parameters
 
+        # LiDAR Parameters
         self.max_lidar_range = 3.50
         self.minimum_range = 0.15
 
-
         # Obstacle Clustering
-
         self.cluster_distance = 0.25
         self.minimum_cluster_size = 3
 
-
         # Topics
-
         self.odom_topic = "/robot1/odom"
         self.scan_topic = "/robot1/scan"
 
@@ -92,22 +89,26 @@ class DigitalTwinNode(Node):
         self.error_topic = "/digital_twin/error"
         self.marker_topic = "/digital_twin_markers"
 
-        # Robot State
-
+        # Robot State (Physical Real World)
         self.robot_x = 0.0
         self.robot_y = 0.0
         self.robot_theta = 0.0
 
-        # Laser Points
+        # Digital Twin State (Virtual World)
+        self.dt_x = 0.0
+        self.dt_y = 0.0
+        self.dt_theta = 0.0
 
+        # Synchronization Error Vector
+        self.sync_error = 0.0
+
+        # Laser Points
         self.lidar_points = []
 
         # Detected Obstacles
-
         self.detected_obstacles = []
 
         # Dynamic Obstacles (Synchronized with Section VI.C)
-
         self.dynamic_obstacles = [
             # Static Obstacle 1
             {
@@ -133,7 +134,6 @@ class DigitalTwinNode(Node):
         ]
 
         # Subscribers
-
         self.create_subscription(
             Odometry,
             self.odom_topic,
@@ -148,9 +148,7 @@ class DigitalTwinNode(Node):
             10
         )
 
-
         # Publishers
-
         self.state_pub = self.create_publisher(
             Pose2D,
             self.state_topic,
@@ -175,19 +173,16 @@ class DigitalTwinNode(Node):
             10
         )
 
-
-        # Main Timer
+        # Main Timer Loop (10 Hz / Ts = 0.10 s)
         self.timer = self.create_timer(
             self.Ts,
             self.update_digital_twin
         )
 
         # Startup Message
-
         self.get_logger().info("Digital Twin Node Started.")
 
     # Odometry Callback
-
 
     def odom_callback(self, msg):
         self.robot_x = msg.pose.pose.position.x
@@ -198,8 +193,13 @@ class DigitalTwinNode(Node):
 
         (_, _, self.robot_theta) = euler_from_quaternion(quaternion)
 
+        # Real-time synchronization assimilation (DT state tracks physical state)
+        self.dt_x = self.robot_x
+        self.dt_y = self.robot_y
+        self.dt_theta = self.robot_theta
 
     # LiDAR Callback
+
     def scan_callback(self, msg):
         self.lidar_points.clear()
         angle = msg.angle_min
@@ -308,15 +308,13 @@ class DigitalTwinNode(Node):
                 obstacle["y"] = ymax
                 obstacle["vy"] *= -1.0
 
-    ############################################################
     # Publish Robot State
-    ############################################################
 
     def publish_robot_state(self):
         state = Pose2D()
-        state.x = self.robot_x
-        state.y = self.robot_y
-        state.theta = self.robot_theta
+        state.x = self.dt_x
+        state.y = self.dt_y
+        state.theta = self.dt_theta
         self.state_pub.publish(state)
 
     # Publish Obstacles
@@ -339,12 +337,17 @@ class DigitalTwinNode(Node):
 
         self.obstacle_pub.publish(obstacle_array)
 
-    # Publish Synchronization Error
+    # Publish Synchronization Error (Equation 11)
 
     def publish_error(self):
-        error = Float32()
-        error.data = 0.0
-        self.error_pub.publish(error)
+        # Synchronization Error: || x_real - x_DT ||_2
+        dx = self.robot_x - self.dt_x
+        dy = self.robot_y - self.dt_y
+        self.sync_error = math.sqrt(dx * dx + dy * dy)
+
+        error_msg = Float32()
+        error_msg.data = float(self.sync_error)
+        self.error_pub.publish(error_msg)
 
     # Publish RViz Markers
 
@@ -428,12 +431,14 @@ class DigitalTwinNode(Node):
             f"Robot Position : ({self.robot_x:.2f}, {self.robot_y:.2f})"
         )
         self.get_logger().debug(
+            f"Sync Error e_DT : {self.sync_error:.4f} m"
+        )
+        self.get_logger().debug(
             f"Detected LiDAR Obstacles : {len(self.detected_obstacles)}"
         )
         self.get_logger().debug(
             f"Dynamic Obstacles : {len(self.dynamic_obstacles)}"
         )
-
 
     # Main Digital Twin Update Loop
 
