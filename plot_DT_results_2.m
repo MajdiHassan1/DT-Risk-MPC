@@ -1,8 +1,4 @@
-clear; clc; close all;
-
-
 % DT-Risk MPC Post-Processing & Figure Generation Script
-% Synchronized with Manuscript: Paper 2_Majdi Hassan_V2.pdf
 
 % Manuscript Parameters
 d_safe = 0.250;        % Predefined Safety Distance Threshold (m)
@@ -11,12 +7,12 @@ r_robot = 0.105;       % TurtleBot3 Chassis Radius (m)
 r_obs = 0.050;         % Obstacle Radius (m)
 
 % Global Style Configuration for IEEE/Q1 Publication Standards
-set(0, 'DefaultAxesFontName', 'Arial');
+set(0, 'DefaultAxesFontName', 'Times New Roman');
 set(0, 'DefaultAxesFontSize', 12);
-set(0, 'DefaultTextFontName', 'Arial');
+set(0, 'DefaultTextFontName', 'Times New Roman');
 set(0, 'DefaultTextFontSize', 12);
 
-% Scenario 1: Obstacle-Free Environment (Fig. 5)
+% Scenario 1: Obstacle-Free Environment (Fig. 4)
 if exist('scenario1_results.mat', 'file')
     data1 = load('scenario1_results.mat');
     sim_obj1 = find_sim_data(data1, 'out1');
@@ -28,7 +24,7 @@ if exist('scenario1_results.mat', 'file')
     prop1 = squeeze(prop1)';
     t1    = t1(:);
 
-    figure('Name', 'Fig 5: Obstacle-Free Environment', 'Color', 'w', 'Position', [100, 100, 650, 320]);
+    figure('Name', 'Fig 4: Obstacle-Free Environment', 'Color', 'w', 'Position', [100, 100, 650, 320]);
     plot(ref1(:,1), ref1(:,2), 'k--', 'LineWidth', 2); hold on;
     plot(prop1(:,1), prop1(:,2), 'b', 'LineWidth', 2.5);
     plot(prop1(1,1), prop1(1,2), 'go', 'MarkerFaceColor', 'g', 'MarkerSize', 8);
@@ -42,11 +38,10 @@ if exist('scenario1_results.mat', 'file')
            'Location', 'northeast', 'FontSize', 11);
     title('Reference trajectory and robot trajectory in obstacle-free environment', 'FontSize', 13, 'FontWeight', 'normal');
     
-    saveas(gcf, 'Fig_5.png');
+    saveas(gcf, 'Fig_4.png');
 end
 
-
-% Scenario 2: Static Obstacles Environment (Fig. 6)
+% Scenario 2: Static Obstacles Environment (Fig. 5)
 if exist('scenario2_results.mat', 'file')
     data2 = load('scenario2_results.mat');
     sim_obj2 = find_sim_data(data2, 'out2');
@@ -58,16 +53,14 @@ if exist('scenario2_results.mat', 'file')
     ref2  = squeeze(ref2)';
     prop2 = squeeze(prop2)';
 
-    % Extract obstacles
     obs2_1 = [3.5, 1.2];
     obs2_2 = [2.8, 0.8];
     obs2_3 = [5.0, 3.5];
 
-    figure('Name', 'Fig 6: Static-Obstacle Environment', 'Color', 'w', 'Position', [100, 100, 700, 320]);
+    figure('Name', 'Fig 5: Static-Obstacle Environment', 'Color', 'w', 'Position', [100, 100, 700, 320]);
     plot(ref2(:,1), ref2(:,2), 'k--', 'LineWidth', 2); hold on;
     plot(prop2(:,1), prop2(:,2), 'b', 'LineWidth', 2.5);
 
-    % Color matching exact manuscript style
     plot(obs2_1(1), obs2_1(2), 'ro', 'MarkerSize', 10, 'MarkerFaceColor', 'r');
     plot(obs2_2(1), obs2_2(2), 'mo', 'MarkerSize', 10, 'MarkerFaceColor', 'm');
     plot(obs2_3(1), obs2_3(2), 'co', 'MarkerSize', 10, 'MarkerFaceColor', 'c');
@@ -84,15 +77,15 @@ if exist('scenario2_results.mat', 'file')
            'Start', 'End'}, 'Location', 'northeastoutside', 'FontSize', 11);
     title('Robot trajectory in static-obstacle environment', 'FontSize', 13, 'FontWeight', 'normal');
     
-    saveas(gcf, 'Fig_6.png');
+    saveas(gcf, 'Fig_5.png');
 end
 
-% Scenario 3: Dynamic Obstacles Environment (Fig. 7 & Fig. 8)
+% Scenario 3: Dynamic Obstacles Environment (Fig. 6 & Fig. 7)
 if exist('scenario3_results.mat', 'file')
     data3 = load('scenario3_results.mat');
     sim_obj3 = find_sim_data(data3, 'out3');
 
-    [ref3, t3]     = get_sim_signal(sim_obj3, data3, 'ref_out');
+    [ref3, t3]    = get_sim_signal(sim_obj3, data3, 'ref_out');
     [conv3, ~]    = get_sim_signal(sim_obj3, data3, 'x_conv_out');
     [prop3, ~]    = get_sim_signal(sim_obj3, data3, 'x_prop_out');
     [risk3, ~]   = get_sim_signal(sim_obj3, data3, 'risk_out');
@@ -106,17 +99,14 @@ if exist('scenario3_results.mat', 'file')
 
     obs3_list = extract_obstacles(obs3_raw);
 
- --
-    % Figure 7: Navigation Trajectories in Dynamic-Obstacle Environment
-    figure('Name', 'Fig 7: Dynamic-Obstacle Environment', 'Color', 'w', 'Position', [100, 100, 720, 330]);
+    % Figure 6: Navigation Trajectories in Dynamic-Obstacle Environment
+    figure('Name', 'Fig 6: Dynamic-Obstacle Environment', 'Color', 'w', 'Position', [100, 100, 720, 330]);
     plot(ref3(:,1), ref3(:,2), 'k--', 'LineWidth', 2); hold on;
     plot(conv3(:,1), conv3(:,2), 'r:', 'LineWidth', 2.5);
     plot(prop3(:,1), prop3(:,2), 'b', 'LineWidth', 2.5);
 
-    % Static Obstacle 1 (Yellow circle with black border)
     plot(3.5, 1.2, 'ko', 'MarkerSize', 11, 'LineWidth', 2, 'MarkerFaceColor', 'y');
 
-    % Dynamic Obstacle Trajectories (Magenta & Cyan Dashed)
     if length(obs3_list) >= 2
         obs2 = obs3_list{2};
         plot(obs2(:,1), obs2(:,2), 'm--', 'LineWidth', 2.2);
@@ -138,28 +128,24 @@ if exist('scenario3_results.mat', 'file')
            'Robot start', 'Robot end'}, 'Location', 'northeastoutside', 'FontSize', 11);
     title('Navigation trajectories in dynamic-obstacle environment', 'FontSize', 13, 'FontWeight', 'normal');
     
-    saveas(gcf, 'Fig_7.png');
+    saveas(gcf, 'Fig_6.png');
 
-   
-    % Figure 8: Future Obstacle Trajectory Prediction over Horizon
+    % Figure 7: Future Obstacle Trajectory Prediction over Horizon
     k_show = round(length(t3) / 2);
     Ts = 0.1;
     Np = 20;
 
-    figure('Name', 'Fig 8: Future Obstacle Prediction', 'Color', 'w', 'Position', [100, 100, 680, 360]); hold on;
+    figure('Name', 'Fig 7: Future Obstacle Prediction', 'Color', 'w', 'Position', [100, 100, 680, 360]); hold on;
     
-    % Static Obstacle 1
     plot(3.5, 1.2, 'ko', 'MarkerSize', 11, 'LineWidth', 2, 'MarkerFaceColor', 'y');
 
     if length(obs3_list) >= 3
         obs2 = obs3_list{2};
         obs3 = obs3_list{3};
 
-        % Actual full trajectories
         plot(obs2(:,1), obs2(:,2), 'm--', 'LineWidth', 2);
         plot(obs3(:,1), obs3(:,2), 'c--', 'LineWidth', 2);
 
-        % Future Horizon Predictions
         for j = 2:3
             if j == 2, obsj = obs2; col = 'm'; else, obsj = obs3; col = 'c'; end
 
@@ -175,7 +161,6 @@ if exist('scenario3_results.mat', 'file')
                 pred_y(i) = yo + voy * i * Ts;
             end
 
-            % Predicted trajectory dots & line matching Fig. 8
             plot(pred_x, pred_y, '.-', 'Color', col, 'LineWidth', 2.5, 'MarkerSize', 14);
         end
     end
@@ -192,9 +177,8 @@ if exist('scenario3_results.mat', 'file')
            'Location', 'southeast', 'FontSize', 11);
     title('Future obstacle trajectory prediction over the MPC horizon', 'FontSize', 13, 'FontWeight', 'normal');
     
-    saveas(gcf, 'Fig_8.png');
+    saveas(gcf, 'Fig_7.png');
 end
-
 
 % Helper Functions
 function obs_list = extract_obstacles(obs_raw)
