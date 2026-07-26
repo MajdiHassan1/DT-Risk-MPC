@@ -67,9 +67,13 @@ class MPCSolver:
         self.sigma = 0.35          # Risk-Sensitivity Parameter (\sigma)
         self.safe_distance = 0.250 # Predefined Safety Distance (d_safe = 0.250 m)
 
-        # Robot Velocity Bounds (Table I Limits)
+        # Robot Physical Dimensions (Table I Alignment)
+        self.r_robot = 0.105       # TurtleBot3 Chassis Radius (m)
+        self.r_obs = 0.050         # Obstacle Physical Radius (m)
+
+        # Robot Velocity Bounds (Table I Hardware Limits: TurtleBot3 Burger)
         self.v_min = 0.0
-        self.v_max = 1.0   # Maximum Linear Velocity (1.0 m/s)
+        self.v_max = 0.26  # Maximum Linear Velocity Limit (0.26 m/s)
 
         self.w_min = -1.5  # Minimum Angular Velocity (-1.5 rad/s)
         self.w_max = 1.5   # Maximum Angular Velocity (1.5 rad/s)
@@ -84,8 +88,8 @@ class MPCSolver:
         # Control Matrix U = [u0 u1 ... uN-1]
         self.U = ca.SX.sym("U", self.nu, self.N)
 
-        # Slack Variables Eps = [eps0 eps1 ... epsN-1] (Eq. 21)
-        self.Eps = ca.SX.sym("Eps", self.N)
+        # Dual-Indexed Slack Variables Eps = [eps_{0,0} ... eps_{N-1, N_obs-1}] (Eqs. 21, 24, 25)
+        self.Eps = ca.SX.sym("Eps", self.N, self.max_obstacles)
 
         # Parameters
         self.X0 = ca.SX.sym("X0", self.nx)
@@ -148,7 +152,6 @@ class MPCSolver:
 
             xk = self.X[:, k]
             uk = self.U[:, k]
-            eps_k = self.Eps[k]
             x_next = self.X[:, k + 1]
 
             # Dynamic Kinematic Model Propagation
@@ -178,19 +181,26 @@ class MPCSolver:
             # 2. Control Effort Cost: u' * R * u
             self.cost += ca.mtimes([uk.T, self.R, uk])
 
-            # 3. Collision Risk Cost & Soft-Constraint Quadratic Penalty (Eq. 21)
+            # 3. Collision Risk Cost Scaling
             self.cost += self.lambda_risk * self.risk * (uk[0] ** 2 + 0.5 * uk[1] ** 2)
-            self.cost += self.rho_slack * (eps_k ** 2)
 
-            # 4. Obstacle Avoidance Constraints with Relaxation (Eq. 24)
-            for i in range(self.max_obstacles):
-                ox = self.obstacles[0, i]
-                oy = self.obstacles[1, i]
+            # 4. Obstacle Avoidance Constraints & Slack Variable Penalties per Obstacle (Eq. 21, 24, 25)
+            for j in range(self.max_obstacles):
+                eps_kj = self.Eps[k, j]
+                ox = self.obstacles[0, j]
+                oy = self.obstacles[1, j]
 
-                distance = ca.sqrt((xk[0] - ox) ** 2 + (xk[1] - oy) ** 2 + 1e-6)
+                # Center-to-Center Euclidean Distance
+                center_distance = ca.sqrt((xk[0] - ox) ** 2 + (xk[1] - oy) ** 2 + 1e-6)
 
-                # Relaxed Safety Constraint: d_i >= d_safe - eps_i
-                self.constraints.append(distance + eps_k)
+                # Surface-to-Surface Clearance: d_j(k+i|k) = ||p_r - p_obs||_2 - r_r - r_obs (Eq. 17)
+                surface_clearance = center_distance - self.r_robot - self.r_obs
+
+                # Quadratic Slack Variable Penalty Term \rho * \epsilon_{i,j}^2 (Eq. 21)
+                self.cost += self.rho_slack * (eps_kj ** 2)
+
+                # Reformulated Soft Safety Constraint: d_j >= d_safe - \epsilon_{i,j} (Eq. 24)
+                self.constraints.append(surface_clearance + eps_kj)
                 self.lbg.append(self.safe_distance)
                 self.ubg.append(1.0e6)
 
@@ -209,8 +219,8 @@ class MPCSolver:
             self.lbx.extend([self.v_min, self.w_min])
             self.ubx.extend([self.v_max, self.w_max])
 
-        # Non-negative Slack Variable Bounds (eps_i >= 0, Eq. 25)
-        for _ in range(self.N):
+        # Non-negative Dual-Indexed Slack Variable Bounds (\epsilon_{i,j} >= 0, Eq. 25)
+        for _ in range(self.N * self.max_obstacles):
             self.lbx.append(0.0)
             self.ubx.append(INF)
 
@@ -317,7 +327,7 @@ class MPCSolver:
         shifted_controls[:, -1] = shifted_controls[:, -2]
 
         # Preserve Slack Variable Guess Length
-        slack_guess = np.zeros(self.N)
+        slack_guess = np.zeros(self.N * self.max_obstacles)
 
         self.initial_guess = np.concatenate([
             shifted_states.reshape(-1, order="F"),
@@ -438,6 +448,7 @@ class MPCSolver:
             f"safe_distance={self.safe_distance}, "
             f"vmax={self.v_max}, wmax={self.w_max})"
         )
+
 
 # Standalone Test Entry Point
 
