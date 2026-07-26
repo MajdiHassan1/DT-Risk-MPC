@@ -5,7 +5,6 @@ obstacle_prediction_node.py
 
 Obstacle Prediction Node
 Digital Twin-Assisted Risk-Aware MPC
-Synchronized with Manuscript: Paper 2_Majdi Hassan_V2.pdf
 
 Author : Majdi Hassan et al.
 
@@ -69,7 +68,7 @@ class ObstaclePredictionNode(Node):
             self.Ts,
             self.predict_obstacles
         )
-#
+
         # Startup Message
         self.get_logger().info("Obstacle Prediction Node Started.")
 
@@ -117,7 +116,7 @@ class ObstaclePredictionNode(Node):
         y = obstacle.position.y
         vx, vy = velocity
 
-        # Project positions across Np future horizon steps
+        # Project positions across Np future horizon steps (Eqs. 15-16)
         for k in range(1, self.Np + 1):
             pose = Pose()
             pose.position.x = float(x + vx * k * self.Ts)
