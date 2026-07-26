@@ -5,8 +5,7 @@ mpc_solver.py
 
 Risk-Aware Nonlinear Model Predictive Controller (NMPC)
 
-
-Author : Majdi Hassan
+Author : Majdi Hassan et al.
 
 Robot:
     TurtleBot3 Mobile Robot
@@ -30,16 +29,13 @@ except ImportError:
 
 class MPCSolver:
 
-
     # Constructor
 
     def __init__(self, horizon=20, dt=0.10):
 
-
         # Prediction Parameters (Table I)
         self.N = horizon  # Np = 20
         self.dt = dt      # Ts = 0.10 s
-
 
         # Robot Kinematic Model
         self.model = DifferentialDriveModel(dt)
@@ -65,9 +61,13 @@ class MPCSolver:
         self.sigma = 0.35          # Risk-Sensitivity Parameter (\sigma)
         self.safe_distance = 0.250 # Safety Distance Threshold (d_safe = 0.250 m)
 
-        # Actuator Velocity Bounds (Table I)
+        # Robot Physical Dimensions (Table I Alignment)
+        self.r_robot = 0.105       # TurtleBot3 Chassis Radius (m)
+        self.r_obs = 0.050         # Obstacle Physical Radius (m)
+
+        # Actuator Velocity Bounds (Table I: TurtleBot3 Burger Hardware Limits)
         self.v_min = 0.0
-        self.v_max = 1.0   # Maximum Linear Velocity Limit (1.0 m/s)
+        self.v_max = 0.26  # Maximum Linear Velocity Limit (0.26 m/s)
 
         self.w_min = -1.5  # Minimum Angular Velocity Limit (-1.5 rad/s)
         self.w_max = 1.5   # Maximum Angular Velocity Limit (1.5 rad/s)
@@ -77,7 +77,9 @@ class MPCSolver:
         # Optimization Variables
         self.X = ca.SX.sym("X", self.nx, self.N + 1)
         self.U = ca.SX.sym("U", self.nu, self.N)
-        self.Eps = ca.SX.sym("Eps", self.N)  # Soft-constraint slack variables
+        
+        # Dual-Indexed Soft-Constraint Slack Variables Eps = [eps_{i,j}] (Eqs. 21, 24, 25)
+        self.Eps = ca.SX.sym("Eps", self.N, self.max_obstacles)
 
         # Parameter Vector Inputs
         self.X0 = ca.SX.sym("X0", self.nx)
@@ -146,7 +148,6 @@ class MPCSolver:
 
             xk = self.X[:, k]
             uk = self.U[:, k]
-            eps_k = self.Eps[k]
             x_next = self.X[:, k + 1]
 
             # Dynamic System Model Forward Propagation (Eqs. 6-8)
@@ -182,14 +183,14 @@ class MPCSolver:
 
             previous_u = uk
 
-            # 4. Collision Risk & Soft Constraint Penalty Cost (Eq. 21)
+            # 4. Collision Risk Cost Scaling (Eq. 21)
             self.cost += self.lambda_risk * self.risk * (uk[0]**2 + 0.5 * uk[1]**2)
-            self.cost += self.rho_slack * (eps_k**2)
 
-            # 5. Obstacle Avoidance Soft Constraints (Eq. 24): d_i >= d_safe - eps_i
-            for i in range(self.max_obstacles):
-                ox = self.obstacles[0, i]
-                oy = self.obstacles[1, i]
+            # 5. Obstacle Avoidance Soft Constraints & Dual-Indexed Slack Penalties (Eqs. 21, 24, 25)
+            for j in range(self.max_obstacles):
+                eps_kj = self.Eps[k, j]
+                ox = self.obstacles[0, j]
+                oy = self.obstacles[1, j]
 
                 obstacle_exists = ca.if_else(
                     ca.fabs(ox) + ca.fabs(oy) < 1e-6,
@@ -197,11 +198,18 @@ class MPCSolver:
                     1
                 )
 
-                dist = ca.sqrt((xk[0] - ox)**2 + (xk[1] - oy)**2 + 1e-6)
+                # Center-to-Center Distance
+                center_dist = ca.sqrt((xk[0] - ox)**2 + (xk[1] - oy)**2 + 1e-6)
 
-                # Relaxed Safety Constraint
+                # Surface Clearance: d_j(k+i|k) = ||p_r - p_obs||_2 - r_r - r_obs (Eq. 17)
+                surface_clearance = center_dist - self.r_robot - self.r_obs
+
+                # Quadratic Slack Variable Penalty Term \rho * \epsilon_{i,j}^2 (Eq. 21)
+                self.cost += self.rho_slack * (eps_kj ** 2)
+
+                # Relaxed Soft Safety Constraint: d_j >= d_safe - \epsilon_{i,j} (Eq. 24)
                 self.constraints.append(
-                    obstacle_exists * (dist + eps_k) + (1 - obstacle_exists) * (self.safe_distance + 1.0)
+                    obstacle_exists * (surface_clearance + eps_kj) + (1 - obstacle_exists) * (self.safe_distance + 1.0)
                 )
                 self.lbg.append(self.safe_distance)
                 self.ubg.append(ca.inf)
@@ -231,8 +239,8 @@ class MPCSolver:
             self.lbx.extend([self.v_min, self.w_min])
             self.ubx.extend([self.v_max, self.w_max])
 
-        # Slack Variable Non-negativity Bounds (eps_i >= 0, Eq. 25)
-        for _ in range(self.N):
+        # Slack Variable Non-negativity Bounds (\epsilon_{i,j} >= 0, Eq. 25)
+        for _ in range(self.N * self.max_obstacles):
             self.lbx.append(0.0)
             self.ubx.append(INF)
 
