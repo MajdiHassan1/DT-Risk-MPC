@@ -72,6 +72,7 @@ class DifferentialDriveModel:
         """
         return x + self.dt * self.dynamics(x, u)
 
+
 # Standalone Integration Verification
 def main():
     print("\n==============================================")
@@ -86,7 +87,9 @@ def main():
 
     # Example Initial State and Test Input
     x0 = ca.DM([0.0, 2.0, 0.0])  # Start pose (0, 2, 0)
-    u0 = ca.DM([1.0, 0.5])  # Test input: v = 1.0 m/s, omega = 0.5 rad/s
+    
+    # Test input aligned with TurtleBot3 Burger hardware limit (Table I: vmax = 0.26 m/s)
+    u0 = ca.DM([0.22, 0.5])  # v = 0.22 m/s, omega = 0.5 rad/s
 
     x_next = model.discrete_model(x0, u0)
 
